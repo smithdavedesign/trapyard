@@ -1,0 +1,56 @@
+{
+  "verdict": "pass",
+  "score": 5,
+  "summary": "Technically sound and weekend-buildable, but demand rests on questionnaire text and vendor blogs with no buyer who lost a deal. Free OSS tools are the real competitor, and it's unproven that a vendor-run report satisfies a reviewer.",
+  "forcingQuestions": {
+    "demand": {
+      "score": 3,
+      "evidence": "Only questionnaire templates and vendor blogs; RESEARCH.md found no first-person account of a lost deal; $16K+ prices are vendor self-reported."
+    },
+    "statusQuo": {
+      "score": 5,
+      "evidence": "Reassurance prose, system-prompt guards or a weekend with free promptfoo/garak/PyRIT; cheap and good enough until a reviewer pushes back."
+    },
+    "specificity": {
+      "score": 4,
+      "evidence": "Founder/CTO of a 3-50 person agent startup with a deal stuck in security review; no named person, buyer (seller vs enterprise) ambiguous."
+    },
+    "wedge": {
+      "score": 6,
+      "evidence": "Four canary-detected trap classes plus a replayable report is shippable in a weekend, but paid trust for an unknown solo author is unproven."
+    },
+    "futureFit": {
+      "score": 6,
+      "evidence": "More tool-using agents raise demand for dated per-model evidence, but market consolidation and bundling by labs and suites thin the moat."
+    }
+  },
+  "premises": [
+    "Agent startups face security reviews asking for injection-test evidence (supported by questionnaires, no buyer stories)",
+    "Startups pay $299-$999 instead of running promptfoo (unsupported)",
+    "Reviewers accept a vendor-run self-test report (unsupported)",
+    "Testing the real tool environment beats model-level probes (plausible)",
+    "An unknown solo author can sell security assurance (weak)"
+  ],
+  "alternatives": [
+    "Minimal: open-source M1 plus a sample report, posted to agent-builder communities",
+    "Ideal: hosted gauntlet with score cards, CI diff and Stripe checkout",
+    "Lateral: contribute traps as a promptfoo plugin or AgentDojo-style pack for reputation",
+    "No David repo to extend; dawnlog's run-receipt format could be reused for logs"
+  ],
+  "wedge": "A public sample report for a vulnerable stub agent plus a 4-trap local range; the test is whether builders ask for a run on their real agent.",
+  "feasibility": {
+    "m1Weekend": true,
+    "zeroCost": true,
+    "notes": "Fastify/Node, two stub agents, scorer, static HTML/JSON report. Proof test: vulnerable stub 4/4 fell, hardened stub 0/4, byte-identical report JSON on re-run. Proves the code, not demand."
+  },
+  "risks": [
+    "Demand inferred from questionnaires, no buyer behavior",
+    "Free OSS substitutes and promptfoo going to OpenAI",
+    "Reviewers may discount vendor-run reports",
+    "Liability if a clean report precedes an incident",
+    "Scenario staleness",
+    "Public gauntlet publishes attack techniques",
+    "Trust in an unknown solo security author"
+  ],
+  "killCriteria": "Drop if, after about 15 contacts, fewer than 2 of 5 say a sample report would help a real security review, if no one shares a real questionnaire, if fewer than 20 agents run the free gauntlet in a month, or if nobody pays $299 within 60 days."
+}

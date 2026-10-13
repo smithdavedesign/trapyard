@@ -1,0 +1,17 @@
+{
+  "stage": "build",
+  "review": {
+    "verdict": "pass",
+    "score": 5,
+    "summary": "Technically sound and weekend-buildable, but demand rests on questionnaire text and vendor blogs with no buyer who lost a deal. Free OSS tools are the real competitor, and it's unproven that a vendor-run report satisfies a reviewer.",
+    "at": "2026-10-13T06:11:04.924Z",
+    "notionAt": "2026-10-13T06:11:06.537Z"
+  },
+  "updatedAt": "2026-10-13T07:58:50.014Z",
+  "ownerApproved": true,
+  "ownerDecision": {
+    "decision": "build",
+    "at": "2026-10-13T07:58:50.014Z",
+    "source": "repohq"
+  }
+}

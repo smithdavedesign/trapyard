@@ -1,0 +1,36 @@
+{
+  "title": "trapyard — self-serve test range that tries to trick your AI agent",
+  "repoName": "trapyard",
+  "oneLiner": "For startups shipping agents that browse, call tools or spend money, it is a test range of planted traps and fake secrets that returns a reproducible, reviewer-readable report of what their agent fell for, for $299–$999 instead of a $16K+ red-team engagement.",
+  "overlaps": "none in the portfolio; nearest are Aidis (passed AI-compliance idea) and dawnlog (agent run receipts), neither tests agents for injection. Outside: promptfoo, garak and PyRIT test models, not a deployed agent's real tools",
+  "tags": [
+    "serious",
+    "business",
+    "one-time",
+    "reach:community",
+    "ai",
+    "security",
+    "agents"
+  ],
+  "effort": "Medium",
+  "confidence": "Low",
+  "sources": [
+    "https://tianpan.co/blog/2026/04/27/80-question-wall-enterprise-ai-security-questionnaire",
+    "https://www.idc.com/resource-center/blog/idc-quanta-five-questions-security/",
+    "https://repello.ai/blog/ai-red-teaming-vendor-pricing",
+    "https://www.securityweek.com/openai-to-acquire-ai-security-startup-promptfoo/",
+    "https://arxiv.org/html/2406.13352v3",
+    "https://www.promptfoo.dev/docs/red-team/",
+    "https://delve.co/blog/what-security-questionnaires-should-ask-ai-vendors",
+    "https://mindstudio.ai/blog/how-to-audit-enterprise-ai-vendor-agentic-security-2-questions-before-you-sign",
+    "https://aona.ai/blog/ai-red-teaming-cost-roi-enterprise-budget-2026/",
+    "https://www.testmuai.com/blog/ai-red-teaming-tools/",
+    "https://www.csoonline.com/article/4058653/check-point-acquires-lakera-to-build-a-unified-ai-security-stack.html",
+    "https://www.decryptiondigest.com/blog/ai-guardrail-vendors-after-acquisition-lakera-prompt-security-aim-calypsoai",
+    "https://toolradar.com/tools/mindgard",
+    "https://aws.amazon.com/marketplace/pp/prodview-rgnmuwtd7jbb6"
+  ],
+  "seedId": "seed-6dae6f",
+  "slug": "trapyard",
+  "recordedAt": "2026-10-13T06:10:05.638Z"
+}
