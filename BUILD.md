@@ -736,7 +736,7 @@ None of them has install scripts, and no browser is downloaded. The CLI imports 
 
 ```sh
 npm install
-npm test                 # 231 tests, no model, no database server, no Stripe, no network beyond 127.0.0.1 (~1–2 min)
+npm test                 # 272 tests, no model, no database server, no Stripe, no network beyond 127.0.0.1 (~1–2 min)
 npm run demo             # vulnerable stub → 4/4 fell; report in trapyard-runs/<run id>/report.html
 npm run demo:hardened    # hardened stub → 0 fell
 
@@ -760,8 +760,12 @@ node bin/trapyard.js report trapyard-runs/<run id>/log.json [--out dir]
 # The hosted gauntlet on your machine (runs kept in memory; Ctrl-C to stop):
 npm run gauntlet         # = node bin/trapyard.js serve [--port 4317] [--host 127.0.0.1] [--public-url <origin>] [--postgres] [--payments]
 
-# Screenshots of the product at work (docs/screenshots/*.png) and a real PDF print of the paid report:
+# Screenshots of the launch-ready site at work (docs/screenshots/*.png): home with the Buy button,
+# a run started, the stub's score card (starts `trapyard serve` itself, placeholder STRIPE_PAYMENT_LINK):
 CHROMIUM_PATH=/path/to/chromium npm run screenshots
+
+# The seller: a hosted run's full report from the database, to send a Buy-button buyer by hand:
+DATABASE_URL=… node bin/trapyard.js export <run id> [--out dir]
 ```
 
 **Paid report on your machine.** Put a Stripe *test-mode* key in your shell as `STRIPE_SECRET_KEY` (from the Stripe dashboard; never in a file), then:
@@ -986,6 +990,8 @@ Earlier decisions:
 
 ## What's left
 
+**Go-live (after M4):** see [LAUNCH-READY.md](LAUNCH-READY.md): SEO, /privacy, the $149 Buy button (`STRIPE_PAYMENT_LINK`), the visit beacon, `trapyard export`, and what David still has to do. While the payment link is set it replaces the $299/$999 Checkout prices on every page; the Checkout code below is unchanged and returns when the link is unset.
+
 The four milestones of the roadmap are built. What stands between this and the first sale:
 
 - **Before the first public deploy:** run `.provision`, deploy, then `npm run smoke -- https://<deployment>`. This is the only check of the real Vercel + Neon path; the tests cover the same code on PGlite and on a local server.
@@ -1049,6 +1055,8 @@ The four milestones of the roadmap are built. What stands between this and the f
 - **The code reads only these, and never logs them:**
   - `DATABASE_URL`
   - `STRIPE_SECRET_KEY`, sent only as the `Authorization` header to `api.stripe.com`
+  - `STRIPE_PAYMENT_LINK` (go-live), the Buy button's public link; not a secret, but never logged either
+  - `VERCEL_ENV` also decides whether the visit beacon loads (production only)
   - `TRAPYARD_PUBLIC_URL`
   - `VERCEL_ENV`, `VERCEL_PROJECT_PRODUCTION_URL` and `VERCEL_URL`
   - `CHROMIUM_PATH`, for the screenshot script only

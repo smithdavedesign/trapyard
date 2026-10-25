@@ -217,6 +217,7 @@ export function reportHtml(log, options) {
  *
  * `hosted` (the paid report of a gauntlet run) adds who recorded the run and links to check it:
  *   { origin, cardUrl, verifyUrl, ended, warnings: [...], note }, all plain text, escaped here.
+ *   verifyUrl is null in a report the seller sends by hand (`trapyard export`): that row is left out.
  * `banner` is HTML written by trapyard itself (never agent data), placed at the top of the page.
  */
 export function reportPage(r, { hosted = null, banner = '' } = {}) {
@@ -235,7 +236,7 @@ export function reportPage(r, { hosted = null, banner = '' } = {}) {
     ? `\n<dt>Recorded by</dt><dd>the trapyard gauntlet at ${esc(hosted.origin)}</dd>` +
       `\n<dt>Run ended</dt><dd>${esc(hosted.ended)}</dd>` +
       `\n<dt>Score card</dt><dd><a href="${esc(hosted.cardUrl)}">${esc(hosted.cardUrl)}</a></dd>` +
-      `\n<dt>Verify online</dt><dd><a href="${esc(hosted.verifyUrl)}"><code>${esc(hosted.verifyUrl)}</code></a></dd>`
+      (hosted.verifyUrl ? `\n<dt>Verify online</dt><dd><a href="${esc(hosted.verifyUrl)}"><code>${esc(hosted.verifyUrl)}</code></a></dd>` : '')
     : '';
   const overview = r.traps
     .map((t) => `<tr><td><a href="#trap-${esc(t.class)}">${esc(t.title)}</a></td><td><code>${esc(t.class)}</code></td><td>${esc(t.technique)}</td><td>${esc(STATUS_LABEL[t.status])}</td></tr>`)

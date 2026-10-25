@@ -1,6 +1,6 @@
-// The score card's share image: a 1200×630 PNG (the size link previews use), drawn with Node
-// built-ins only. A PNG is a signature plus CRC-checked chunks; the pixels are deflated RGB rows.
-// Text uses a 5×7 bitmap font, scaled up, in capitals.
+// The share images: a score card's and the site's own (siteImage, below), 1200×630 PNGs (the size
+// link previews use), drawn with Node built-ins only. A PNG is a signature plus CRC-checked chunks;
+// the pixels are deflated RGB rows. Text uses a 5×7 bitmap font, scaled up, in capitals.
 //
 //   TRAPYARD SCORE CARD
 //   4 OF 4 TRAPS FELL                                      (headline)
@@ -163,6 +163,51 @@ function encodePng(width, height, scanlines) {
     chunk('IDAT', deflateSync(scanlines, { level: 9 })),
     chunk('IEND', Buffer.alloc(0)),
   ]);
+}
+
+/** Where siteImage() puts things: a big name, the tagline, one row per trap, a footer. */
+export const SITE_LAYOUT = {
+  nameY: 60,
+  nameScale: 12,
+  taglineY: 175,
+  taglineGap: 50,
+  taglineScale: 5,
+  rowTop: 310,
+  rowGap: 50,
+  rowScale: 4,
+  bullet: 28,
+};
+
+/**
+ * The share image of the site itself (/og.png, every public page's og:image), 1200×630:
+ *
+ *   TRAPYARD
+ *   A FREE TEST RANGE THAT TRIES
+ *   TO TRICK YOUR AI AGENT
+ *   ■ FOLLOWED A PLANTED INSTRUCTION      (one row per trap, a bullet in the "fell" colour)
+ *   …
+ *   PLANTED INJECTIONS · FAKE TOOLS · CANARY SECRETS
+ *   FREE SCORE CARDS · NOT A CERTIFICATION
+ *
+ * Pure: always the same bytes.
+ */
+export function siteImage(traps) {
+  const { width, height } = IMAGE;
+  const L = LAYOUT;
+  const S = SITE_LAYOUT;
+  const c = canvas(width, height, COLORS.background);
+  c.text(L.margin, S.nameY, 'TRAPYARD', S.nameScale, COLORS.text);
+  c.text(L.margin, S.taglineY, 'A FREE TEST RANGE THAT TRIES', S.taglineScale, COLORS.text);
+  c.text(L.margin, S.taglineY + S.taglineGap, 'TO TRICK YOUR AI AGENT', S.taglineScale, COLORS.text);
+  traps.forEach((trap, i) => {
+    const top = S.rowTop + i * S.rowGap;
+    c.fill(L.margin, top, S.bullet, S.bullet, COLORS.fell);
+    c.text(L.margin + S.bullet + 20, top + (S.bullet - 7 * S.rowScale) / 2, trap.title, S.rowScale, COLORS.text);
+  });
+  c.fill(L.margin, L.ruleY, width - 2 * L.margin, 2, COLORS.rule);
+  c.text(L.margin, L.footerY, 'PLANTED INJECTIONS · FAKE TOOLS · CANARY SECRETS', L.footerScale, COLORS.muted);
+  c.text(L.margin, L.footerY + L.footerGap, 'FREE SCORE CARDS · NOT A CERTIFICATION', L.footerScale, COLORS.muted);
+  return encodePng(width, height, c.data);
 }
 
 /** The share image for a card view (see cardView() in gauntlet.js). Pure: same card, same bytes. */

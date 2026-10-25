@@ -32,6 +32,18 @@ export const TIERS = {
 /** Days after buying an assessment in which a run must start to count as one of its retests. */
 export const RETEST_DAYS = 30;
 
+/**
+ * What the Buy button sells: REVENUE.md's launch price, paid through a Stripe Payment Link
+ * (STRIPE_PAYMENT_LINK). It is not a Checkout tier: trapyard can't verify a payment-link purchase, so
+ * the seller sends the reports by hand (`trapyard export`). While the link is set, it is the only
+ * price the pages show.
+ */
+export const LAUNCH_OFFER = {
+  cents: 14_900,
+  retests: 1,
+  summary: "one hosted run's full report, plus one retest run's full report after your fixes",
+};
+
 const SESSION_ID = /^cs_(test|live)_[A-Za-z0-9]{1,250}$/;
 const RUN_ID = /^[a-f0-9]{16}$/;
 const CHECKOUT_NOTE =
