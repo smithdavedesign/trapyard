@@ -1,0 +1,29 @@
+{
+  "name": "trapyard",
+  "version": "0.1.0",
+  "description": "Self-serve test range that tries to trick your AI agent: planted injections, fake tools, canary secrets and a reviewer-readable report.",
+  "type": "module",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "trapyard": "bin/trapyard.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "demo": "node bin/trapyard.js run --agent \"node test/stubs/agents.js vulnerable\"",
+    "demo:hardened": "node bin/trapyard.js run --agent \"node test/stubs/agents.js hardened\"",
+    "gauntlet": "node bin/trapyard.js serve",
+    "smoke": "node test/hosted-smoke.js",
+    "screenshots": "node scripts/screenshots.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.11",
+    "playwright-core": "^1.64.1"
+  }
+}
