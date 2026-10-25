@@ -10,7 +10,12 @@
 //   GET  /report/<run>[.json]   the full report: 402 until paid, 200 with ?session_id=<paid session>
 //   POST /checkout              run + tier → a Stripe Checkout Session → 303 to Stripe
 //   GET  /report/retest         a pasted retest link + session → 303 to that run's report
-//   GET  /terms                 terms of sale
+//   GET  /terms, /privacy       terms, privacy
+//   GET  /robots.txt, /sitemap.xml, /og.png (the site's share image), /beacon.js (the visit beacon)
+//
+// With a payment link (STRIPE_PAYMENT_LINK) the landing page and an ended run's 402 page show a Buy
+// button that sells LAUNCH_OFFER; the seller delivers it by hand (exportRun, `trapyard export`).
+// With `signals` (Vercel production only) public pages load the visit beacon (src/beacon.js).
 //
 //   agent ─▶ /r/<run>/… ─▶ store.withRun(run) ─┬ ended ─────────────▶ 410
 //                                              ├ expired ───────────▶ score, close (expired), 410
@@ -34,12 +39,24 @@
 
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
-import { END_REASON, cardPage, errorPage, landingPage, paidBanner, reportLockedPage, runStartedPage, termsPage } from './pages.js';
+import { SIGNAL_URL, beaconScript } from './beacon.js';
+import {
+  END_REASON,
+  cardPage,
+  errorPage,
+  landingPage,
+  paidBanner,
+  privacyPage,
+  reportLockedPage,
+  runStartedPage,
+  termsPage,
+} from './pages.js';
 import { PaymentError, RETEST_DAYS, TIERS, isSessionId, stripeCheckout } from './payments.js';
 import { LOG_FORMAT, answer, newRun, parseRunUrl, readBody, send, validateRunOptions } from './range.js';
 import { buildReport, reportPage } from './report.js';
-import { SCENARIO_SET, runTraps } from './scenarios.js';
-import { shareImage } from './share-image.js';
+import { SCENARIO_SET, TRAPS, runTraps } from './scenarios.js';
+import { shareImage, siteImage } from './share-image.js';
+import { SITE_IMAGE, robotsTxt, sitemapXml } from './site.js';
 import { postgresStore } from './store.js';
 
 export const CARD_FORMAT = 'trapyard.card/1';
@@ -60,15 +77,21 @@ const RUN_ID_IN = /(?:\/r\/|\/report\/|^)([a-f0-9]{16})(?:[/?#.]|$)/;
 const LANDING_CACHE = 'public, max-age=300';
 // A finished card never changes, so the CDN may keep it (the image costs ~40 ms to draw).
 const FINISHED_CACHE = 'public, max-age=300, s-maxage=86400';
+// The site's share image changes only with a deploy.
+const SITE_IMAGE_CACHE = 'public, max-age=3600, s-maxage=86400';
 // The paid report and its lock: never in a shared cache or a search index.
 const PRIVATE = { 'cache-control': 'private, no-store', 'x-robots-tag': 'noindex' };
 const HTML = 'text/html; charset=utf-8';
 const HTML_HEADERS = {
   // Chrome applies form-action to the redirect after a form POST, so /checkout's 303 needs Stripe here.
+  // The only script is the same-origin beacon, and the only place it may send to is RepoHQ.
   'content-security-policy':
-    "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self' https://checkout.stripe.com; base-uri 'none'; frame-ancestors 'none'",
+    "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self' https://checkout.stripe.com; " +
+    `base-uri 'none'; frame-ancestors 'none'; script-src 'self'; connect-src ${new URL(SIGNAL_URL).origin}`,
   'referrer-policy': 'no-referrer',
 };
+
+let siteImagePng = null; // drawn on first request, then kept: it never changes
 
 export const CARD_SCOPE =
   'This score card covers only the traps listed, run on the trapyard range against this agent on the date shown. ' +
@@ -95,6 +118,9 @@ class ConfigError extends Error {}
 /** A stored run as a trapyard.log/1: its head plus its events. */
 export const logOf = (record, events) => ({ ...record.head, events });
 
+/** The report frozen when the run ended; built from the log only for a run closed before reports were frozen. */
+const frozenReport = async (store, record) => record.result?.report ?? buildReport(logOf(record, await store.events(record.id)));
+
 /**
  * Scores the log as it stands and freezes what the card shows, plus the full report (sold at
  * /report/<run>): rendered later from code, a log stops rendering once the scenario set changes.
@@ -116,6 +142,43 @@ function ending(record, events, closedBy, closedAt, head = record.head) {
 }
 
 const isExpired = (record, at) => !record.closedAt && at.getTime() >= Date.parse(record.expiresAt);
+
+/** The record as it stands at `at`; if its deadline passed with nobody posting a summary, it is scored and closed first. */
+async function settle(store, record, at) {
+  if (!isExpired(record, at)) return record;
+  const closed = await store.withRun(record.id, async (current, loadEvents) => {
+    if (current.closedAt) return { record: current };
+    const update = ending(current, await loadEvents(), 'expired', current.expiresAt);
+    return { update, record: { ...current, ...update } };
+  });
+  return closed?.record ?? record;
+}
+
+/**
+ * How an ended run was recorded, for its full report: `hosted` for reportPage() and `block` for the
+ * JSON. `verifyUrl` (the paid page's own address) is left out of a report sent by hand.
+ */
+function hostedParts(record, { origin, cardUrl, verifyUrl = null }) {
+  const warnings = record.closedBy === 'expired' ? [EXPIRED_WARNING] : [];
+  const hosted = {
+    origin,
+    cardUrl,
+    verifyUrl,
+    ended: `${record.closedAt}: ${END_REASON[record.closedBy] ?? record.closedBy}`,
+    warnings,
+    note: HOSTED_NOTE,
+  };
+  const block = {
+    recordedBy: origin,
+    cardUrl,
+    ...(verifyUrl ? { verifyUrl } : {}),
+    endedAt: record.closedAt,
+    endedBy: record.closedBy,
+    warnings,
+    note: HOSTED_NOTE,
+  };
+  return { hosted, block };
+}
 
 /** An http(s) origin with no path, query or login; a trailing slash is dropped. */
 export function publicOrigin(raw, name = 'TRAPYARD_PUBLIC_URL') {
@@ -160,10 +223,32 @@ export function paymentsConfig(env) {
   return { secretKey: key };
 }
 
+/**
+ * The Buy button's Stripe Payment Link from STRIPE_PAYMENT_LINK: null (no Buy button) when unset,
+ * else an https URL with no login. It is public (the page shows it), but the error still never
+ * contains the value.
+ */
+export function paymentLinkConfig(env) {
+  const raw = env.STRIPE_PAYMENT_LINK;
+  if (!raw) return null;
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new ConfigError('STRIPE_PAYMENT_LINK is not a URL');
+  }
+  if (url.protocol !== 'https:' || url.username || url.password) {
+    throw new ConfigError('STRIPE_PAYMENT_LINK must be an https URL such as https://buy.stripe.com/… (no login)');
+  }
+  return url.href;
+}
+
 export function createGauntlet({
   store,
   publicUrl,
-  payments = null, // stripeCheckout() from payments.js; null sells nothing
+  payments = null, // stripeCheckout() from payments.js; null sells nothing through Checkout
+  paymentLink = null, // from paymentLinkConfig(); null hides the Buy button
+  signals = false, // load the visit beacon (production only)
   maxEvents = HOSTED_LIMITS.maxEvents,
   maxBody = HOSTED_LIMITS.maxBody,
   runTtlMs = HOSTED_LIMITS.runTtlMs,
@@ -172,6 +257,7 @@ export function createGauntlet({
   log = console.error,
 }) {
   const limits = { maxEvents, maxBody, runTtlMs, runsPerHour };
+  const site = { publicUrl, paymentLink, signals };
   const cardUrl = (cardId) => `${publicUrl}/s/${cardId}`;
   const reportUrl = (runId) => `${publicUrl}/report/${runId}`;
 
@@ -291,16 +377,7 @@ export function createGauntlet({
     send(res, out.reply.status, out.reply.payload, out.reply.type);
   }
 
-  /** The record as it stands; if its deadline passed with nobody posting a summary, it is scored and closed first. */
-  async function settled(record) {
-    if (!isExpired(record, now())) return record;
-    const closed = await store.withRun(record.id, async (current, loadEvents) => {
-      if (current.closedAt) return { record: current };
-      const update = ending(current, await loadEvents(), 'expired', current.expiresAt);
-      return { update, record: { ...current, ...update } };
-    });
-    return closed?.record ?? record;
-  }
+  const settled = (record) => settle(store, record, now());
 
   async function cardRequest(res, cardId, ext) {
     const found = await store.findCard(cardId);
@@ -312,12 +389,13 @@ export function createGauntlet({
     const cache = { 'cache-control': card.state === 'finished' ? FINISHED_CACHE : 'no-store' };
     if (ext === '.json') return send(res, 200, card, undefined, cache);
     if (ext === '.png') return send(res, 200, shareImage(card), 'image/png', cache);
-    return sendHtml(res, 200, cardPage(card), cache);
+    return sendHtml(res, 200, cardPage(card, site), cache);
   }
 
   /**
    * Whether `sessionId` opens this run's full report: { session, retest } if it does, otherwise
-   * { status, message, offer } (offer: show the buy forms). Throws PaymentError if Stripe fails.
+   * { status, message, offer } (offer: show a way to buy, the Buy button or the Checkout forms).
+   * Throws PaymentError if Stripe fails.
    */
   async function access(record, sessionId) {
     const deny = (status, message, offer = false) => ({ status, message, offer });
@@ -325,7 +403,7 @@ export function createGauntlet({
     if (!record.closedAt) {
       return deny(409, 'The run is still going. Its full report is ready once the agent posts its summary or the run expires.');
     }
-    if (!payments) return sessionId ? deny(503, 'Payments are not set up on this deployment.') : deny(402, ready);
+    if (!payments) return sessionId ? deny(503, 'Payments are not set up on this deployment.') : deny(402, ready, Boolean(paymentLink));
     if (!sessionId) return deny(402, ready, true);
     if (!isSessionId(sessionId)) return deny(402, `That payment link is not valid. ${ready}`, true);
     const session = await payments.getSession(sessionId);
@@ -376,33 +454,19 @@ export function createGauntlet({
         card: cardView(record),
         offer: verdict.offer,
         paymentsOn: Boolean(payments),
+        site,
       });
       return sendHtml(res, verdict.status, page, PRIVATE);
     }
 
     const { session, retest } = verdict;
-    // The report frozen when the run ended; built from the log only for a run closed before reports were frozen.
-    const report = record.result?.report ?? buildReport(logOf(record, await store.events(record.id)));
-    const hosted = {
+    const report = await frozenReport(store, record);
+    const { hosted, block } = hostedParts(record, {
       origin: publicUrl,
       cardUrl: cardUrl(record.cardId),
       verifyUrl: `${reportUrl(record.id)}?session_id=${session.id}`,
-      ended: `${record.closedAt}: ${END_REASON[record.closedBy] ?? record.closedBy}`,
-      warnings: record.closedBy === 'expired' ? [EXPIRED_WARNING] : [],
-      note: HOSTED_NOTE,
-    };
-    if (ext) {
-      const block = {
-        recordedBy: publicUrl,
-        cardUrl: hosted.cardUrl,
-        verifyUrl: hosted.verifyUrl,
-        endedAt: record.closedAt,
-        endedBy: record.closedBy,
-        warnings: hosted.warnings,
-        note: hosted.note,
-      };
-      return send(res, 200, { ...report, hosted: block }, undefined, PRIVATE);
-    }
+    });
+    if (ext) return send(res, 200, { ...report, hosted: block }, undefined, PRIVATE);
     const retestsUntil = new Date(Date.parse(session.createdAt) + RETEST_DAYS * DAY_MS).toISOString().slice(0, 10);
     const banner = paidBanner({ tier: session.tier, retest, sessionId: session.id, retestsUntil });
     return sendHtml(res, 200, reportPage(report, { hosted, banner }), PRIVATE);
@@ -449,7 +513,7 @@ export function createGauntlet({
   async function formRun(req, res) {
     await readBody(req, MAX_API_BODY); // the form has no fields; its body is read and ignored
     try {
-      return sendHtml(res, 201, runStartedPage(await startRun()), { 'cache-control': 'no-store' });
+      return sendHtml(res, 201, runStartedPage(await startRun(), site), { 'cache-control': 'no-store' });
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
       const retry = err.status === 429 ? { 'retry-after': String(RETRY_AFTER_S) } : {};
@@ -480,6 +544,23 @@ export function createGauntlet({
     }
   }
 
+  const cached = { 'cache-control': LANDING_CACHE };
+  /** The fixed GET pages and files, by path (a Map, so no path can reach an object's prototype). */
+  const ASSETS = new Map([
+    ['/terms', (res) => sendHtml(res, 200, termsPage(site), cached)],
+    ['/privacy', (res) => sendHtml(res, 200, privacyPage(site), cached)],
+    ['/robots.txt', (res) => send(res, 200, robotsTxt(publicUrl), 'text/plain; charset=utf-8', cached)],
+    ['/sitemap.xml', (res) => send(res, 200, sitemapXml(publicUrl), 'application/xml; charset=utf-8', cached)],
+    ['/beacon.js', (res) => send(res, 200, beaconScript(), 'text/javascript; charset=utf-8', cached)],
+    [
+      SITE_IMAGE.path,
+      (res) => {
+        siteImagePng ??= siteImage(TRAPS);
+        send(res, 200, siteImagePng, 'image/png', { 'cache-control': SITE_IMAGE_CACHE });
+      },
+    ],
+  ]);
+
   async function route(req, res) {
     const url = req.url ?? '/';
     const target = parseRunUrl(url);
@@ -488,8 +569,10 @@ export function createGauntlet({
     const readOnly = req.method === 'GET' || req.method === 'HEAD';
     if (path === '/') {
       if (!readOnly) return notAllowed(req, res);
-      return sendHtml(res, 200, landingPage({ publicUrl, limits }), { 'cache-control': LANDING_CACHE });
+      return sendHtml(res, 200, landingPage({ site, limits }), { 'cache-control': LANDING_CACHE });
     }
+    const asset = ASSETS.get(path);
+    if (asset) return readOnly ? asset(res) : notAllowed(req, res);
     if (path === '/runs') return req.method === 'POST' ? formRun(req, res) : notAllowed(req, res);
     if (path === '/api/runs') return req.method === 'POST' ? apiRun(req, res) : notAllowed(req, res);
     const card = CARD_PATH.exec(path);
@@ -498,7 +581,6 @@ export function createGauntlet({
     if (report) return readOnly ? reportRequest(req, res, report[1], report[2]) : notAllowed(req, res);
     if (path === '/report/retest') return readOnly ? retestRedirect(req, res) : notAllowed(req, res);
     if (path === '/checkout') return req.method === 'POST' ? checkout(req, res) : notAllowed(req, res);
-    if (path === '/terms') return readOnly ? sendHtml(res, 200, termsPage(), { 'cache-control': LANDING_CACHE }) : notAllowed(req, res);
     req.resume();
     return send(res, 404, { error: 'not found' });
   }
@@ -536,10 +618,22 @@ export async function serveGauntlet({ port = 0, host = '127.0.0.1', publicUrl, .
   return { origin, publicUrl: publicUrl ?? origin, gauntlet, close };
 }
 
+/** The Buy button's link from env, or null; a malformed one is logged (never its value) and hides the button. */
+export function paymentLinkFromEnv(env, log) {
+  try {
+    return paymentLinkConfig(env);
+  } catch (err) {
+    if (!(err instanceof ConfigError)) throw err;
+    log(`trapyard: ${err.message}; the Buy button is hidden`);
+    return null;
+  }
+}
+
 /**
  * The Vercel function: on the first request it reads the config, connects (`connect(databaseUrl)` →
  * a { query, transaction } database) and migrates. A failed setup is not cached, so the next request
- * tries again. Nothing it logs can contain a setting's value.
+ * tries again. Nothing it logs can contain a setting's value. The visit beacon is on only in
+ * production (VERCEL_ENV), never on previews.
  */
 export function vercelHandler({ env, connect, log = console.error }) {
   let ready = null;
@@ -548,9 +642,17 @@ export function vercelHandler({ env, connect, log = console.error }) {
       ready = (async () => {
         const { publicUrl, databaseUrl } = gauntletConfig(env);
         const pay = paymentsConfig(env);
+        const paymentLink = paymentLinkFromEnv(env, log);
         const store = postgresStore(await connect(databaseUrl));
         await store.migrate();
-        return createGauntlet({ store, publicUrl, log, payments: pay && stripeCheckout(pay) });
+        return createGauntlet({
+          store,
+          publicUrl,
+          log,
+          payments: pay && stripeCheckout(pay),
+          paymentLink,
+          signals: env.VERCEL_ENV === 'production',
+        });
       })();
       ready.catch(() => {
         ready = null;
@@ -569,5 +671,30 @@ export function vercelHandler({ env, connect, log = console.error }) {
       return send(res, 500, { error: config ? 'trapyard is not configured on this deployment; see the function log' : 'internal error' });
     }
     return gauntlet.handler(req, res);
+  };
+}
+
+/**
+ * An ended run's full report as files, for the seller to send to a Buy-button buyer by hand
+ * (`trapyard export`): log.json, report.json (with how it was recorded) and report.html, as the paid
+ * page shows them minus the verify-online link. Null for an unknown run; throws while the run is going.
+ * An expired run nobody closed yet is scored and closed first, as opening its card would.
+ */
+export async function exportRun(store, runId, { now = new Date() } = {}) {
+  const found = await store.findRun(runId);
+  if (!found) return null;
+  const record = await settle(store, found, now);
+  if (!record.closedAt) throw new Error(`run ${runId} has not ended yet: its report is ready once the agent posts its summary or the run expires`);
+  const events = await store.events(record.id);
+  const report = record.result?.report ?? buildReport(logOf(record, events));
+  const origin = new URL(record.head.run.base).origin; // where the run was recorded, whatever the config says now
+  const { hosted, block } = hostedParts(record, { origin, cardUrl: `${origin}/s/${record.cardId}` });
+  const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
+  return {
+    files: {
+      'log.json': json(logOf(record, events)),
+      'report.json': json({ ...report, hosted: block }),
+      'report.html': reportPage(report, { hosted }),
+    },
   };
 }

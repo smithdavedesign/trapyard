@@ -1,36 +1,68 @@
 #!/usr/bin/env node
-// npm run screenshots: proof that the product does its job, as PNGs in docs/screenshots/.
+// npm run screenshots: proof that the launch-ready site does its job, as PNGs in docs/screenshots/.
 //
-// It starts the gauntlet on 127.0.0.1 (the same server `trapyard serve` runs, memory store) with
-// payments pointed at a fake Stripe, also on 127.0.0.1, and waits until it answers. Then it:
-//   1. opens the landing page and starts a run with its form, as a visitor would
-//   2. runs the deliberately vulnerable stub agent against that run's task URL (sample data only)
-//   3. opens the run's full report link: 402, the page that sells it
-//   4. buys the $299 report through the real /checkout → Stripe session → return URL flow
-//      (the fake marks it paid) and opens the paid report
-//   5. prints the paid report to PDF with Chromium and checks the PDF
-// Each page is captured at desktop size (1280×800) and on a phone (iPhone 13), viewport only.
+// It starts the app itself: `trapyard serve` on a free port on 127.0.0.1 (the handler the Vercel
+// function runs, with runs in memory), with a placeholder STRIPE_PAYMENT_LINK so the Buy button shows.
+// It waits until the app answers, then at desktop size (1280×800) and on a phone (iPhone 13),
+// viewport only:
+//   home  the landing page: "Start a free run" and the Buy button
+//   run   the core action: the visitor presses "Start a free run" and gets the agent's task URL and the
+//         score card and report links, with the footer (privacy, terms, contact) in view
+//   card  the result: the deliberately vulnerable stub agent (sample data only) did that run's task,
+//         and its score card shows 4 of 4 traps fell, with its share image
+// Then it stops the app. Playwright's browser reports navigator.webdriver, and the app has no
+// VERCEL_ENV, so the visit beacon sends nothing.
 //
 // Chromium comes from CHROMIUM_PATH; no browser is ever downloaded. Not part of `npm test`.
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, devices } from 'playwright-core';
-import { serveGauntlet } from '../src/gauntlet.js';
-import { stripeCheckout } from '../src/payments.js';
-import { memoryStore } from '../src/store.js';
-import { startFakeStripe } from '../test/fake-stripe.js';
 import { vulnerableAgent } from '../test/stubs/agents.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = join(ROOT, 'docs', 'screenshots');
-const PDF = join(ROOT, 'test', '.tmp', 'sample-report.pdf'); // git-ignored: checked, not committed
+const CLI = join(ROOT, 'bin', 'trapyard.js');
+const PAYMENT_LINK = 'https://example.com/pay'; // a placeholder: no real payment link in a screenshot
+const START_TIMEOUT_MS = 15_000;
 
 const SIZES = {
   desktop: { viewport: { width: 1280, height: 800 } },
   mobile: { ...devices['iPhone 13'] },
 };
+
+/** Starts `trapyard serve` on a free port; resolves with its origin and a stop() that waits for it to exit. */
+function startApp() {
+  // Only what the app needs: no setting from this shell (a database, a Stripe key) reaches it.
+  const env = { PATH: process.env.PATH, STRIPE_PAYMENT_LINK: PAYMENT_LINK };
+  const child = spawn(process.execPath, [CLI, 'serve', '--port', '0'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'inherit'] });
+  const exited = new Promise((done) => child.once('exit', done));
+  const stop = async () => {
+    if (child.exitCode === null) child.kill('SIGTERM');
+    await exited;
+  };
+  return new Promise((resolve, reject) => {
+    let out = '';
+    const timer = setTimeout(() => {
+      stop();
+      reject(new Error(`trapyard serve did not start within ${START_TIMEOUT_MS} ms`));
+    }, START_TIMEOUT_MS);
+    child.stdout.setEncoding('utf8').on('data', (chunk) => {
+      out += chunk;
+      const origin = out.match(/trapyard gauntlet on (http:\/\/127\.0\.0\.1:\d+)/)?.[1];
+      if (origin) {
+        clearTimeout(timer);
+        resolve({ origin, stop });
+      }
+    });
+    exited.then((code) => {
+      clearTimeout(timer);
+      reject(new Error(`trapyard serve exited early (${code})`));
+    });
+  });
+}
 
 async function waitUntilUp(url, tries = 50) {
   for (let i = 0; i < tries; i++) {
@@ -44,79 +76,59 @@ async function waitUntilUp(url, tries = 50) {
   throw new Error(`${url} did not answer`);
 }
 
+function expect(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+async function shot(page, name, size) {
+  const file = join(OUT, `${name}-${size}.png`);
+  await page.screenshot({ path: file });
+  console.log(`saved ${file}`);
+}
+
 if (!process.env.CHROMIUM_PATH) {
   console.error('screenshots: set CHROMIUM_PATH to a Chromium binary (no browser is downloaded)');
   process.exit(2);
 }
 
-const stripe = await startFakeStripe();
-const served = await serveGauntlet({
-  store: memoryStore(),
-  payments: stripeCheckout({ secretKey: stripe.key, apiBase: stripe.apiBase }),
-  port: 0,
-});
-const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH });
+const app = await startApp();
+let browser;
 try {
-  await waitUntilUp(`${served.origin}/`);
+  await waitUntilUp(`${app.origin}/`);
+  browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH });
   mkdirSync(OUT, { recursive: true });
 
-  // 1–2. A visitor starts a run from the landing page; the vulnerable stub agent does the task.
-  const visitor = await browser.newPage();
-  await visitor.goto(`${served.origin}/`);
-  await visitor.click('button[type=submit]');
-  const taskUrl = await visitor.textContent('#task-url');
-  const reportUrl = await visitor.getAttribute('#report-url', 'href');
-  await vulnerableAgent(taskUrl);
-  await visitor.close();
-
-  // 4. Checkout through the real route; the fake Stripe stands in for the buyer paying by card.
-  const runId = reportUrl.split('/report/')[1];
-  const buy = await fetch(`${served.origin}/checkout`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ run: runId, tier: 'report' }).toString(),
-    redirect: 'manual',
-  });
-  if (buy.status !== 303) throw new Error(`checkout answered ${buy.status}`);
-  const sessionId = buy.headers.get('location').split('/pay/')[1];
-  stripe.pay(sessionId);
-  const paidUrl = stripe.session(sessionId).success_url.replace('{CHECKOUT_SESSION_ID}', sessionId);
-
-  const shots = [
-    ['home', `${served.origin}/`, 200],
-    ['checkout', reportUrl, 402],
-    ['report', paidUrl, 200],
-  ];
   for (const [size, options] of Object.entries(SIZES)) {
     const context = await browser.newContext(options);
     const page = await context.newPage();
-    for (const [name, url, status] of shots) {
-      const res = await page.goto(url, { waitUntil: 'load' });
-      if (res.status() !== status) throw new Error(`${name}: expected ${status}, got ${res.status()}`);
-      const file = join(OUT, `${name}-${size}.png`);
-      await page.screenshot({ path: file });
-      console.log(`saved ${file}`);
-    }
+
+    // home: the start page, with the Buy button linking to the payment link.
+    const home = await page.goto(`${app.origin}/`, { waitUntil: 'load' });
+    expect(home.status() === 200, `home: ${home.status()}`);
+    const buy = page.locator('main .actions a.buy').first();
+    expect(await buy.isVisible(), 'home: the Buy button is not in view');
+    expect((await buy.getAttribute('href')) === PAYMENT_LINK, 'home: the Buy button does not link to STRIPE_PAYMENT_LINK');
+    await shot(page, 'home', size);
+
+    // run: the core action, "Start a free run".
+    const [started] = await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), page.click('button[type=submit]')]);
+    expect(started.status() === 201, `run: ${started.status()}`);
+    const taskUrl = await page.textContent('#task-url');
+    const cardUrl = await page.getAttribute('#card-url', 'href');
+    for (const href of ['/privacy', '/terms']) expect(await page.locator(`footer a[href="${href}"]`).count(), `run: no footer link to ${href}`);
+    await page.locator('footer').scrollIntoViewIfNeeded();
+    await shot(page, 'run', size);
+
+    // card: the vulnerable stub agent does the task; the score card shows what it fell for.
+    await vulnerableAgent(taskUrl);
+    const card = await page.goto(cardUrl, { waitUntil: 'load' });
+    expect(card.status() === 200, `card: ${card.status()}`);
+    expect((await page.textContent('.lede')).includes('4 of 4 traps fell'), 'card: the stub run did not score 4 of 4');
+    await shot(page, 'card', size);
+
     await context.close();
   }
-
-  // 5. The paid report printed to PDF by the browser, as a buyer would with Save as PDF.
-  const printer = await browser.newPage();
-  await printer.goto(paidUrl, { waitUntil: 'load' });
-  const pdf = await printer.pdf({ format: 'A4', printBackground: false });
-  const pages = (pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) ?? []).length;
-  if (pdf.subarray(0, 5).toString() !== '%PDF-' || pages < 2) throw new Error(`the printed report is not a usable PDF (${pages} pages)`);
-  mkdirSync(dirname(PDF), { recursive: true });
-  writeFileSync(PDF, pdf);
-  console.log(`printed the paid report to PDF: ${pages} A4 pages, ${pdf.length} bytes (${PDF})`);
-  // The same page as the printer lays it out (print CSS), for a look without a PDF viewer.
-  await printer.setViewportSize({ width: 794, height: 1123 }); // A4 at 96 dpi
-  await printer.emulateMedia({ media: 'print' });
-  const preview = join(dirname(PDF), 'report-print-preview.png');
-  await printer.screenshot({ path: preview, fullPage: true });
-  console.log(`print preview: ${preview}`);
 } finally {
-  await browser.close();
-  await served.close();
-  await stripe.close();
+  await browser?.close();
+  await app.stop();
 }

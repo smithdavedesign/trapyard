@@ -6,6 +6,7 @@
 //   report re-render report.json and report.html from a saved log.json
 //   ci     `run`, then exit 1 if a trap fell that did not fall in the baseline run (or at all)
 //   serve  run the hosted gauntlet (public page, run URLs, score cards, paid reports)
+//   export write a hosted run's full report from the database, to send a Buy-button buyer by hand
 // Exit codes: 0 done (whatever the agent fell for), 1 unexpected error, 2 usage error.
 // ci: 0 nothing newly fell, 1 a trap newly fell, 2 usage error, 3 incomplete run.
 
@@ -14,7 +15,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { ciCheck, ciText, diffRuns, diffText, statusLabel as label } from '../src/diff.js';
-import { paymentsConfig, publicOrigin, serveGauntlet } from '../src/gauntlet.js';
+import { exportRun, paymentLinkFromEnv, paymentsConfig, publicOrigin, serveGauntlet } from '../src/gauntlet.js';
 import { stripeCheckout } from '../src/payments.js';
 import { createRange, validateRunOptions, validateTraps } from '../src/range.js';
 import { buildReport, reportHtml, reportJson } from '../src/report.js';
@@ -45,7 +46,13 @@ const USAGE = `usage:
       and its paid full report. Runs are kept in memory and lost when it stops, unless --postgres
       (keeps them in Postgres at DATABASE_URL). --payments sells full reports through Stripe
       Checkout with STRIPE_SECRET_KEY. --public-url is the origin agents and buyers reach it at,
-      if not the listen address (e.g. a tunnel or a host's URL).`;
+      if not the listen address (e.g. a tunnel or a host's URL). STRIPE_PAYMENT_LINK in the
+      environment shows a Buy button linking to it.
+  trapyard export <run id> [--out <dir>]
+      Writes a hosted run's full report (log.json, report.json, report.html) from the Postgres
+      database at DATABASE_URL, to send by hand to whoever bought it with the Buy button. The run
+      id is in the run's report link, or the Stripe payment's client_reference_id.
+      Default --out: trapyard-runs/<run id>.`;
 
 const DEFAULT_PORT = 4317;
 const DEFAULT_TIMEOUT_S = 120;
@@ -298,9 +305,9 @@ async function commandReport(args) {
 }
 
 /** The Postgres store at DATABASE_URL, migrated, and how to close its pool; exit 1 (naming only the error code) if it can't be set up. */
-async function postgresFromEnv() {
+async function postgresFromEnv(needs = '--postgres') {
   const url = process.env.DATABASE_URL;
-  if (!url) usageError('--postgres needs DATABASE_URL (a Postgres connection string) in the environment');
+  if (!url) usageError(`${needs} needs DATABASE_URL (a Postgres connection string) in the environment`);
   try {
     const { default: pg } = await import('pg'); // loaded only here: the rest of the CLI needs nothing beyond Node
     const pool = pgPool(pg, url);
@@ -350,12 +357,22 @@ async function commandServe(args) {
     }
   }
   const paid = values.payments ? paymentsFromEnv() : null;
+  const paymentLink = paymentLinkFromEnv(process.env, console.error);
   const { store, end } = values.postgres ? await postgresFromEnv() : { store: memoryStore(), end: async () => {} };
-  const served = await serveGauntlet({ store, payments: paid?.payments ?? null, port, host: values.host ?? '127.0.0.1', publicUrl });
+  const served = await serveGauntlet({
+    store,
+    payments: paid?.payments ?? null,
+    paymentLink,
+    signals: process.env.VERCEL_ENV === 'production', // as on Vercel: the visit beacon only in production
+    port,
+    host: values.host ?? '127.0.0.1',
+    publicUrl,
+  });
   const listening = served.publicUrl === served.origin ? '' : ` (listening on ${served.origin})`;
   console.log(`trapyard gauntlet on ${served.publicUrl}${listening}`);
   console.log(values.postgres ? 'runs are kept in Postgres (DATABASE_URL)' : 'runs are kept in memory and lost when it stops');
   console.log(paid ? `payments on (${paid.mode})` : 'payments off: full reports are not for sale (--payments turns them on)');
+  console.log(paymentLink ? 'Buy button on (STRIPE_PAYMENT_LINK)' : 'Buy button off (STRIPE_PAYMENT_LINK is not set)');
   console.log('Ctrl-C to stop');
   await new Promise((done) => {
     process.once('SIGINT', done);
@@ -365,11 +382,44 @@ async function commandServe(args) {
   await end();
 }
 
-const COMMANDS = { run: commandRun, ci: commandCi, replay: commandReplay, diff: commandDiff, report: commandReport, serve: commandServe };
+async function commandExport(args) {
+  const { values, positionals } = parse(args, { out: { type: 'string' } }, true);
+  if (positionals.length !== 1 || !/^[a-f0-9]{16}$/.test(positionals[0])) {
+    usageError('export takes one run id: 16 hex characters, from the run\'s report link (/report/<run id>)');
+  }
+  const [runId] = positionals;
+  const dir = resolve(values.out ?? join('trapyard-runs', runId));
+  const { store, end } = await postgresFromEnv('export');
+  try {
+    const exported = await exportRun(store, runId);
+    if (!exported) {
+      console.error(`trapyard: no run ${runId} in the database at DATABASE_URL`);
+      process.exitCode = 1;
+      return;
+    }
+    mkdirSync(dir, { recursive: true });
+    for (const [name, text] of Object.entries(exported.files)) writeFileSync(join(dir, name), text);
+    const report = JSON.parse(exported.files['report.json']);
+    console.log(`run ${runId}: ${report.summary.fell} of ${report.summary.total} traps fell (ended ${report.hosted.endedAt})`);
+    console.log(`report: ${join(dir, 'report.html')}\njson:   ${join(dir, 'report.json')}`);
+  } finally {
+    await end();
+  }
+}
+
+const COMMANDS = {
+  run: commandRun,
+  ci: commandCi,
+  replay: commandReplay,
+  diff: commandDiff,
+  report: commandReport,
+  serve: commandServe,
+  export: commandExport,
+};
 
 const [command, ...rest] = process.argv.slice(2);
 if (!command) usageError('no command given');
-if (!COMMANDS[command]) usageError(`unknown command: ${command}`);
+if (!Object.hasOwn(COMMANDS, command)) usageError(`unknown command: ${command}`);
 try {
   await COMMANDS[command](rest);
 } catch (err) {

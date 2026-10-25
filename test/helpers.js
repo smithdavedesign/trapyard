@@ -25,7 +25,7 @@ export const stub = (mode) => `${node} ${JSON.stringify(STUBS)} ${mode}`;
  */
 export function childEnv(extra = {}) {
   const env = { ...process.env };
-  for (const name of ['DATABASE_URL', 'STRIPE_SECRET_KEY']) delete env[name];
+  for (const name of ['DATABASE_URL', 'STRIPE_SECRET_KEY', 'STRIPE_PAYMENT_LINK', 'VERCEL_ENV']) delete env[name];
   return { ...env, ...extra };
 }
 

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { crc32, inflateSync } from 'node:zlib';
 import { SCENARIO_SET, TRAPS } from '../src/scenarios.js';
-import { COLORS, IMAGE, LAYOUT, glyphFor, pillBox, shareImage, textWidth } from '../src/share-image.js';
+import { COLORS, IMAGE, LAYOUT, SITE_LAYOUT, glyphFor, pillBox, shareImage, siteImage, textWidth } from '../src/share-image.js';
 
 /** Minimal PNG reader: checks the signature and every chunk's CRC, returns size and an RGB pixel getter. */
 function decodePng(buf) {
@@ -91,6 +91,23 @@ test('text: lowercase is drawn as uppercase and unknown characters as ?', () => 
   assert.equal(glyphFor('✓'), glyphFor('?'));
   assert.notEqual(glyphFor('A'), glyphFor('?'));
   for (const ch of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -.,:/()·') assert.notEqual(glyphFor(ch), undefined);
+});
+
+test("the site's share image (/og.png): 1200×630, a bullet per trap, everything inside the frame, the same bytes every time", () => {
+  const png = siteImage(TRAPS);
+  const img = decodePng(png);
+  assert.deepEqual([img.width, img.height], [1200, 630]);
+  assert.deepEqual(img.pixel(0, 0), COLORS.background);
+  const S = SITE_LAYOUT;
+  TRAPS.forEach((_, i) => assert.deepEqual(img.pixel(LAYOUT.margin + 3, S.rowTop + i * S.rowGap + 3), COLORS.fell, `bullet ${i}`));
+  assert.ok(png.equals(siteImage(TRAPS)));
+  assert.ok(png.length < 100_000, `${png.length} bytes`);
+  const right = IMAGE.width - LAYOUT.margin;
+  assert.ok(LAYOUT.margin + textWidth('TRAPYARD', S.nameScale) < right);
+  assert.ok(LAYOUT.margin + textWidth('A FREE TEST RANGE THAT TRIES', S.taglineScale) < right);
+  for (const t of TRAPS) assert.ok(LAYOUT.margin + S.bullet + 20 + textWidth(t.title, S.rowScale) < right, t.title);
+  assert.ok(LAYOUT.margin + textWidth('PLANTED INJECTIONS · FAKE TOOLS · CANARY SECRETS', LAYOUT.footerScale) < right);
+  assert.ok(S.rowTop + TRAPS.length * S.rowGap < LAYOUT.ruleY, 'rows end above the rule');
 });
 
 test('layout: every trap title fits before its pill, and the headline fits the width', () => {
