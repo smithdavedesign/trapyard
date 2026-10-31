@@ -42,7 +42,7 @@ trapyard is not a Next.js app. It is one Node HTTP handler that runs as the Verc
    - Score cards never sell, as before: a shared card can't be used to buy the owner's report.
    - Nothing is hard-coded: no link, no key.
 4. **Visit beacon** (`src/beacon.js`, served as `/beacon.js`)
-   - It POSTs `{"slug":"trapyard","kind":…,"referrer":…}` to `https://repohq.vercel.app/api/ideas/signal`, fire-and-forget, with `keepalive` and `credentials: 'omit'`.
+   - It POSTs `{"slug":"trapyard","kind":…,"referrer":…}` to `https://idea-factory.1426davejobs.workers.dev/api/ideas/signal`, fire-and-forget, with `keepalive` and `credentials: 'omit'`.
    - Events:
      - **`visit`** on public pages and score cards, once per session (`sessionStorage`)
      - **`activate`** when someone uses the core action, **"Start a free run"** (it fires on the run-started page), once per browser (`localStorage`)
@@ -52,7 +52,7 @@ trapyard is not a Next.js app. It is one Node HTTP handler that runs as the Verc
      - `navigator.webdriver` is true
      - localStorage `repohq:notrack` is set
      - the deployment is not production. The server includes the script tag only when `VERCEL_ENV === 'production'`, so previews and local runs never load it.
-   - The CSP gained `script-src 'self'` and `connect-src https://repohq.vercel.app`, and nothing else.
+   - The CSP gained `script-src 'self'` and `connect-src https://idea-factory.1426davejobs.workers.dev`, and nothing else.
    - The paid report and error pages load no script.
 5. **`.provision`** has exactly the two requested lines: the Vercel project, and a request for the $149 Stripe payment link.
 6. **Tests.** They check:

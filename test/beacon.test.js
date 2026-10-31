@@ -65,7 +65,7 @@ const run = (w) => beacon(w.win, { url: SIGNAL_URL, slug: SIGNAL_SLUG });
 const kinds = (w) => w.sent.map((s) => s.body.kind);
 
 test('the endpoint and slug are the ones RepoHQ counts', () => {
-  assert.equal(SIGNAL_URL, 'https://repohq.vercel.app/api/ideas/signal');
+  assert.equal(SIGNAL_URL, 'https://idea-factory.1426davejobs.workers.dev/api/ideas/signal');
   assert.equal(SIGNAL_SLUG, 'trapyard');
 });
 

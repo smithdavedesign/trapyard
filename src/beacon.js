@@ -13,7 +13,7 @@
 // The body goes as text/plain in no-cors mode: a "simple" request, so no CORS preflight can drop it
 // and the page never reads the answer. The JSON is the same either way.
 
-export const SIGNAL_URL = 'https://repohq.vercel.app/api/ideas/signal';
+export const SIGNAL_URL = 'https://idea-factory.1426davejobs.workers.dev/api/ideas/signal';
 export const SIGNAL_SLUG = 'trapyard';
 
 /**
