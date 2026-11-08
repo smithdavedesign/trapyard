@@ -51,7 +51,7 @@ trapyard is not a Next.js app. It is one Node HTTP handler that runs as the Verc
    - It sends nothing when:
      - `navigator.webdriver` is true
      - localStorage `repohq:notrack` is set
-     - the deployment is not production. The server includes the script tag only when `VERCEL_ENV === 'production'`, so previews and local runs never load it.
+     - the deployment is not production. The server includes the script tag only when `deployEnv(env) === 'production'` (`NEXT_PUBLIC_DEPLOY_ENV`, which the Cloudflare Worker sets in `wrangler.jsonc`, else `VERCEL_ENV`), so previews and local runs never load it.
    - The CSP gained `script-src 'self'` and `connect-src https://idea-factory.1426davejobs.workers.dev`, and nothing else.
    - The paid report and error pages load no script.
 5. **`.provision`** has exactly the two requested lines: the Vercel project, and a request for the $149 Stripe payment link.
@@ -83,7 +83,7 @@ trapyard is not a Next.js app. It is one Node HTTP handler that runs as the Verc
 - **The JSON-LD Offer appears only while the Buy button does.** Structured data should match what the page sells; production with the link set has it on every public page.
 - **Delivery is by hand, "usually within two business days".** That promise is on the landing, report and terms pages; change it in `src/pages.js` (`DELIVERY`) and `termsPage` if it doesn't suit.
 - **The beacon's body is sent as `text/plain` in `no-cors` mode.** The body is still JSON. A "simple" request can't be dropped by a CORS preflight, and the page never reads the answer. If RepoHQ's endpoint insists on `Content-Type: application/json`, change `send()` in `src/beacon.js`.
-- **The production gate is on the server** (`VERCEL_ENV`), not a `NEXT_PUBLIC_*` variable: there is no client bundle. `trapyard serve` uses the same rule.
+- **The production gate is on the server** (`deployEnv`: `NEXT_PUBLIC_DEPLOY_ENV`, set as a plain var on the Cloudflare Worker, else `VERCEL_ENV`): there is no client bundle. `trapyard serve` uses the same rule.
 - **Score cards count as public pages for tags and the beacon, but stay out of the sitemap.** They are unlisted per-run pages.
 
 ## How to check
@@ -95,20 +95,20 @@ npm run gauntlet                                # the same without the variable:
 CHROMIUM_PATH=/path/to/chromium npm run screenshots
 ```
 
-After deploying, the following should all answer 200 on `https://trapyard.vercel.app`: `/robots.txt`, `/sitemap.xml`, `/og.png`, `/privacy` and `/terms`. Also:
-- Paste `https://trapyard.vercel.app/` into Google's Rich Results Test (JSON-LD) and into a Slack or X post (share preview).
-- `npm run smoke -- https://trapyard.vercel.app` still checks the core flow end to end.
+After deploying, the following should all answer 200 on `https://trapyard.1426davejobs.workers.dev` (the Cloudflare Worker since 2026-11-08; `trapyard.vercel.app` answers 402 since the Vercel account was blocked): `/robots.txt`, `/sitemap.xml`, `/og.png`, `/privacy` and `/terms`. Also:
+- Paste `https://trapyard.1426davejobs.workers.dev/` into Google's Rich Results Test (JSON-LD) and into a Slack or X post (share preview).
+- `npm run smoke -- https://trapyard.1426davejobs.workers.dev` still checks the core flow end to end (it passed on 2026-11-08).
 
 ## Left for David
 
 1. **The payment link.** The `request` line in `.provision` asks you for a Stripe Payment Link: $149, one-time, for "trapyard full report + one retest".
-   - Paste its URL into the Vercel project's env as **`STRIPE_PAYMENT_LINK`** (Production), then redeploy. The Buy button appears; nothing else needs setting.
+   - On the Cloudflare Worker: `provision stripe trapyard … --host cloudflare` sets **`STRIPE_PAYMENT_LINK`** as a Worker secret. It is read on every request, so the Buy button appears with no redeploy. (On Vercel: the project's env, then redeploy.)
    - In Stripe, consider a confirmation message such as "Your report arrives by email within two business days".
 2. **Delivering a purchase.** Each payment shows `client_reference_id` (the run id) when it was bought from a run's report page. Otherwise the buyer replies to the receipt with their report link. Then, with `DATABASE_URL` in your shell, run `node bin/trapyard.js export <run id>` and email the `report.html` (or a PDF of it) and `report.json`. Do the same for their one retest.
 3. **Delete the four old screenshots.** My sandbox couldn't delete files: `git rm docs/screenshots/checkout-*.png docs/screenshots/report-*.png`. README no longer shows them.
-4. **Optional custom domain.** Add it in Vercel, then set `TRAPYARD_PUBLIC_URL=https://<domain>` so canonical URLs, the sitemap, share tags and run links all use it.
+4. **Optional custom domain.** Add it to the Worker in Cloudflare, then change `TRAPYARD_PUBLIC_URL` in `wrangler.jsonc` to `https://<domain>` and redeploy, so canonical URLs, the sitemap, share tags and run links all use it.
 5. **Before taking real money:**
-   - Vercel Hobby is for non-commercial use (BUILD.md, "Deploy"). Decide whether to move to a host that allows commercial use first.
+   - Done on 2026-11-08: the gauntlet moved from Vercel Hobby (non-commercial use only) to a Cloudflare Worker on the free plan, which allows commercial use.
    - Read `/terms` and `/privacy`.
    - Make sure the GitHub repo is public, or the "Contact: GitHub issues" link leads nowhere for visitors.
 6. **Your own browser.** On the live site, run `localStorage.setItem('repohq:notrack', '1')` once in the console so your visits aren't counted.

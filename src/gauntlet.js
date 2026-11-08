@@ -1,6 +1,7 @@
 // The hosted gauntlet: a public page that starts runs, the range under /r/<run>/…, and a shareable
-// score card under /s/<card>. The same handler runs as `trapyard serve` (memory store) and as the
-// Vercel function in api/index.js (Postgres store).
+// score card under /s/<card>. The same handler runs as `trapyard serve` (memory store), as the
+// Cloudflare Worker in src/worker.js (production since 2026-11-08) and as the Vercel function in
+// api/index.js (both Postgres).
 //
 //   GET  /                      landing page with a "Start a free run" form
 //   POST /runs                  the form → 201 page with the agent's task URL and the card link
@@ -15,7 +16,7 @@
 //
 // With a payment link (STRIPE_PAYMENT_LINK) the landing page and an ended run's 402 page show a Buy
 // button that sells LAUNCH_OFFER; the seller delivers it by hand (exportRun, `trapyard export`).
-// With `signals` (Vercel production only) public pages load the visit beacon (src/beacon.js).
+// With `signals` (production only: deployEnv) public pages load the visit beacon (src/beacon.js).
 //
 //   agent ─▶ /r/<run>/… ─▶ store.withRun(run) ─┬ ended ─────────────▶ 410
 //                                              ├ expired ───────────▶ score, close (expired), 410
@@ -196,8 +197,16 @@ export function publicOrigin(raw, name = 'TRAPYARD_PUBLIC_URL') {
 }
 
 /**
- * Hosted settings from the environment: the public origin runs live under (TRAPYARD_PUBLIC_URL, else
- * Vercel's production URL in production and the deployment URL elsewhere) and DATABASE_URL.
+ * The deployment a hosted gauntlet runs as: NEXT_PUBLIC_DEPLOY_ENV (the Cloudflare Worker sets
+ * `production` in wrangler.jsonc), else Vercel's VERCEL_ENV; '' when neither is set. Only
+ * `production` loads the visit beacon.
+ */
+export const deployEnv = (env) => env.NEXT_PUBLIC_DEPLOY_ENV || env.VERCEL_ENV || '';
+
+/**
+ * Hosted settings from the environment: the public origin runs live under (TRAPYARD_PUBLIC_URL, set
+ * in wrangler.jsonc for the Worker; else Vercel's production URL in production and the deployment
+ * URL elsewhere) and DATABASE_URL.
  */
 export function gauntletConfig(env) {
   const vercelHost = env.VERCEL_ENV === 'production' ? env.VERCEL_PROJECT_PRODUCTION_URL : env.VERCEL_URL;
@@ -629,30 +638,45 @@ export function paymentLinkFromEnv(env, log) {
   }
 }
 
+/** The hosted gauntlet's settings from env, minus the store; throws ConfigError naming a bad setting. */
+function hostedSettings(env, log) {
+  const { publicUrl, databaseUrl } = gauntletConfig(env);
+  const pay = paymentsConfig(env);
+  return {
+    databaseUrl,
+    options: {
+      publicUrl,
+      log,
+      payments: pay && stripeCheckout(pay),
+      paymentLink: paymentLinkFromEnv(env, log),
+      signals: deployEnv(env) === 'production',
+    },
+  };
+}
+
+/** A failed setup: a 500 that names a missing setting (never a value), else "internal error". */
+function setupFailed(err, req, res, log) {
+  const config = err instanceof ConfigError;
+  log(`trapyard: setup failed: ${config ? err.message : (err.code ?? err.name)}`);
+  req.resume();
+  return send(res, 500, { error: config ? 'trapyard is not configured on this deployment; see the function log' : 'internal error' });
+}
+
 /**
  * The Vercel function: on the first request it reads the config, connects (`connect(databaseUrl)` →
  * a { query, transaction } database) and migrates. A failed setup is not cached, so the next request
  * tries again. Nothing it logs can contain a setting's value. The visit beacon is on only in
- * production (VERCEL_ENV), never on previews.
+ * production (deployEnv), never on previews.
  */
 export function vercelHandler({ env, connect, log = console.error }) {
   let ready = null;
   function setup() {
     if (!ready) {
       ready = (async () => {
-        const { publicUrl, databaseUrl } = gauntletConfig(env);
-        const pay = paymentsConfig(env);
-        const paymentLink = paymentLinkFromEnv(env, log);
+        const { databaseUrl, options } = hostedSettings(env, log);
         const store = postgresStore(await connect(databaseUrl));
         await store.migrate();
-        return createGauntlet({
-          store,
-          publicUrl,
-          log,
-          payments: pay && stripeCheckout(pay),
-          paymentLink,
-          signals: env.VERCEL_ENV === 'production',
-        });
+        return createGauntlet({ store, ...options });
       })();
       ready.catch(() => {
         ready = null;
@@ -665,12 +689,47 @@ export function vercelHandler({ env, connect, log = console.error }) {
     try {
       gauntlet = await setup();
     } catch (err) {
-      const config = err instanceof ConfigError;
-      log(`trapyard: setup failed: ${config ? err.message : (err.code ?? err.name)}`);
-      req.resume();
-      return send(res, 500, { error: config ? 'trapyard is not configured on this deployment; see the function log' : 'internal error' });
+      return setupFailed(err, req, res, log);
     }
     return gauntlet.handler(req, res);
+  };
+}
+
+/**
+ * The Cloudflare Worker's handler (src/worker.js). A Worker can't use a socket another request
+ * opened, so unlike vercelHandler nothing is kept between requests but a flag: each request reads
+ * the config, connects (`connect(databaseUrl)` → a { query, transaction, close } database), and
+ * closes that connection once its response is done, even when the request failed. The tables are
+ * migrated by the first request that succeeds in each isolate. Logs never carry a setting's value.
+ */
+export function workerHandler({ env, connect, log = console.error }) {
+  let migrated = false;
+  return async function handler(req, res) {
+    let db = null;
+    try {
+      let gauntlet;
+      try {
+        const { databaseUrl, options } = hostedSettings(env, log);
+        db = await connect(databaseUrl);
+        const store = postgresStore(db);
+        if (!migrated) {
+          await store.migrate();
+          migrated = true;
+        }
+        gauntlet = createGauntlet({ store, ...options });
+      } catch (err) {
+        return setupFailed(err, req, res, log);
+      }
+      await gauntlet.handler(req, res);
+    } finally {
+      if (db?.close) {
+        try {
+          await db.close();
+        } catch (err) {
+          log(`trapyard: closing the database connection failed: ${err.code ?? err.name}`);
+        }
+      }
+    }
   };
 }
 

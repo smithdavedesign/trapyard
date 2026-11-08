@@ -1,5 +1,18 @@
 # trapyard — self-serve test range that tries to trick your AI agent
 
+## Live
+
+**https://trapyard.1426davejobs.workers.dev**
+
+The hosted gauntlet runs on a Cloudflare Worker (free plan) since 2026-11-08; the Vercel account is blocked and `trapyard.vercel.app` answers 402. Screenshots taken against the live Worker by Playwright in Chrome for Testing; `npm run smoke -- https://trapyard.1426davejobs.workers.dev` passes (both stub agents, cards, share image, report locked until paid).
+
+| | Desktop (1440×900) | Phone (390×844) |
+|---|---|---|
+| The landing page: what trapyard does, and "Start a free run" (no Buy button: no payment link is stored) | <img src="docs/screenshots/live-home-desktop.png" alt="The landing page: what trapyard does, and 'Start a free run' (no Buy button: no payment link is stored), desktop" width="520"> | <img src="docs/screenshots/live-home-phone.png" alt="The landing page: what trapyard does, and 'Start a free run' (no Buy button: no payment link is stored), phone" width="200"> |
+| The core action: a run started (saved in Neon through the Worker), with the agent's task URL and the score card and report links | <img src="docs/screenshots/live-run-desktop.png" alt="The core action: a run started (saved in Neon through the Worker), with the agent's task URL and the score card and report links, desktop" width="520"> | <img src="docs/screenshots/live-run-phone.png" alt="The core action: a run started (saved in Neon through the Worker), with the agent's task URL and the score card and report links, phone" width="200"> |
+| The result: the repo's deliberately vulnerable stub agent did that run's task, and its score card shows 4 of 4 traps fell | <img src="docs/screenshots/live-card-desktop.png" alt="The result: the repo's deliberately vulnerable stub agent did that run's task, and its score card shows 4 of 4 traps fell, desktop" width="520"> | <img src="docs/screenshots/live-card-phone.png" alt="The result: the repo's deliberately vulnerable stub agent did that run's task, and its score card shows 4 of 4 traps fell, phone" width="200"> |
+| The privacy page: what a run stores, the three anonymous beacon events, and Cloudflare as the host | <img src="docs/screenshots/live-privacy-desktop.png" alt="The privacy page: what a run stores, the three anonymous beacon events, and Cloudflare as the host, desktop" width="520"> | <img src="docs/screenshots/live-privacy-phone.png" alt="The privacy page: what a run stores, the three anonymous beacon events, and Cloudflare as the host, phone" width="200"> |
+
 ## Screenshots
 
 ![The landing page on a desktop browser: "Start a free run" and "Buy the full report · $149"](docs/screenshots/home-desktop.png)
@@ -48,3 +61,24 @@ Your agent receives `TRAPYARD_TASK_URL`. It must fetch that URL and do the task.
 Effort: Medium · Confidence: Low
 
 _Researched by the idea pipeline on 2026-10-13 ([original record](https://github.com/smithdavedesign/idea-factory/tree/main/ideas/trapyard)); repo created on David's go-ahead 2026-10-13._
+
+## Hosting on Cloudflare Workers
+
+Since 2026-11-08 the hosted gauntlet is the `trapyard` Worker on Cloudflare (free plan, commercial use allowed).
+[`src/worker.js`](src/worker.js) serves the same node:http handler as the Vercel function through the Workers runtime's
+`node:http` server support (`nodejs_compat`), and `pg` reaches Neon over the Workers socket API. A Worker can't reuse a
+socket another request opened, so `workerHandler` (in `src/gauntlet.js`) opens a `pg` pool per request and closes it
+when the response is done; pages that don't touch the store never connect. The tables are migrated once per isolate.
+
+```bash
+provision cloudflare deploy trapyard "$PWD"            # no build step: wrangler bundles src/worker.js (~71 KiB gzipped)
+provision cloudflare secret trapyard DATABASE_URL      # the Neon database, pushed from the keychain
+npm run smoke -- https://trapyard.1426davejobs.workers.dev   # the core flow end to end, against the live Worker
+```
+
+[`wrangler.jsonc`](wrangler.jsonc) sets `TRAPYARD_PUBLIC_URL` (the Worker's address; change it for a custom domain) and
+`NEXT_PUBLIC_DEPLOY_ENV=production`, which turns the visit beacon on (`deployEnv`: it wins over Vercel's `VERCEL_ENV`).
+It also turns esbuild's `keep_names` off, because `/beacon.js` is `beacon.toString()`. Payments are read at request
+time: `STRIPE_PAYMENT_LINK` (the Buy button; `provision stripe trapyard … --host cloudflare`) and `STRIPE_SECRET_KEY`
+(Checkout for the full report; `provision cloudflare secret trapyard STRIPE_SECRET_KEY`). Neither is stored yet, so the
+Buy button is hidden and checkout answers 503. `api/index.js` and `vercel.json` still work on Vercel.

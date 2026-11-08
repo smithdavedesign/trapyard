@@ -1,4 +1,5 @@
-// Run storage for the hosted gauntlet: memory (trapyard serve, tests) or Postgres (Vercel + Neon).
+// Run storage for the hosted gauntlet: memory (trapyard serve, tests) or Postgres (Neon, from the
+// Cloudflare Worker or the Vercel function).
 //
 // A record is a log head plus the run's ledger, lifecycle and frozen score card:
 //   { id, cardId, head: { format, scenarioSet, run }, spentCents, eventCount,
@@ -153,7 +154,7 @@ function toRecord(row) {
 
 /**
  * `db` is { query(text, params) → {rows}, transaction(fn(q) → value) → value }: pgDatabase(pool) on
- * Vercel, PGlite in tests.
+ * the Worker and on Vercel, PGlite in tests.
  */
 export function postgresStore(db) {
   async function findRun(id) {

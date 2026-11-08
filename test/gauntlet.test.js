@@ -1,13 +1,16 @@
-// The hosted gauntlet: public page, run API, range lifecycle, score card, config and the Vercel entry.
+// The hosted gauntlet: public page, run API, range lifecycle, score card, config, and the Vercel and
+// Cloudflare Worker entries.
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createServer, request } from 'node:http';
-import { HOSTED_LIMITS, gauntletConfig, logOf, vercelHandler } from '../src/gauntlet.js';
+import { join } from 'node:path';
+import { HOSTED_LIMITS, deployEnv, gauntletConfig, logOf, publicOrigin, vercelHandler, workerHandler } from '../src/gauntlet.js';
 import { createRange } from '../src/range.js';
 import { TRAPS } from '../src/scenarios.js';
 import { memoryStore } from '../src/store.js';
 import { hardenedAgent, vulnerableAgent } from './stubs/agents.js';
-import { callTool, getJson, hostedBase, pgliteDatabase, startGauntlet, startHostedRun } from './helpers.js';
+import { ROOT, callTool, getJson, hostedBase, pgliteDatabase, startGauntlet, startHostedRun } from './helpers.js';
 
 const EMAIL = { to: 'lead@payments.invalid', subject: 'Digest', body: 'hello' };
 const MINUTE = 60_000;
@@ -514,5 +517,177 @@ describe('vercelHandler (the Vercel function)', () => {
     assert.ok(!logged.join('\n').includes('placeholder-database'));
     assert.equal((await fetch(`${origin}/`)).status, 200);
     assert.equal(attempts, 2);
+  });
+});
+
+describe('deployEnv', () => {
+  test("NEXT_PUBLIC_DEPLOY_ENV (the Worker's) wins, else VERCEL_ENV, else nothing", () => {
+    assert.equal(deployEnv({ NEXT_PUBLIC_DEPLOY_ENV: 'production', VERCEL_ENV: 'preview' }), 'production');
+    assert.equal(deployEnv({ VERCEL_ENV: 'production' }), 'production');
+    assert.equal(deployEnv({ VERCEL_ENV: 'preview' }), 'preview');
+    assert.equal(deployEnv({}), '');
+  });
+});
+
+describe('workerHandler (the Cloudflare Worker)', () => {
+  let pglite;
+  before(async () => {
+    pglite = await pgliteDatabase();
+  });
+  after(() => pglite.close());
+
+  /** Serves a handler on 127.0.0.1; returns its origin. */
+  async function serve(t, handler) {
+    const server = createServer(handler);
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+    return `http://127.0.0.1:${server.address().port}`;
+  }
+
+  /** A connection over the shared PGlite that counts itself, its closing and the tables it creates. */
+  function counting(counts, { failMigrate = false } = {}) {
+    return () => {
+      counts.connects += 1;
+      const q = (run) => (text, params) => {
+        if (/CREATE TABLE/i.test(text)) {
+          counts.creates += 1;
+          if (failMigrate) {
+            const err = new Error('could not reach placeholder-database');
+            err.code = 'ECONNRESET';
+            throw err;
+          }
+        }
+        return run(text, params);
+      };
+      return {
+        query: q((text, params) => pglite.query(text, params)),
+        transaction: (fn) => pglite.transaction((tq) => fn(q(tq))),
+        close: async () => {
+          counts.closes += 1;
+        },
+      };
+    };
+  }
+
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  test('every request connects and closes its connection when the response is done; tables are migrated once', async (t) => {
+    const counts = { connects: 0, closes: 0, creates: 0 };
+    let origin;
+    const handler = workerHandler({
+      env: { get TRAPYARD_PUBLIC_URL() { return origin; }, DATABASE_URL: 'placeholder-database' },
+      connect: counting(counts),
+      log: () => {},
+    });
+    origin = await serve(t, handler);
+    assert.equal((await fetch(`${origin}/`)).status, 200);
+    await settle();
+    const created = counts.creates;
+    assert.ok(created > 0, 'the first request migrates');
+    assert.deepEqual([counts.connects, counts.closes], [1, 1]);
+
+    const run = await startHostedRun(origin);
+    await vulnerableAgent(run.taskUrl);
+    assert.equal((await getJson(run.cardJsonUrl)).body.summary.fell, 4);
+    await settle();
+    assert.ok(counts.connects > 3, 'one connection per request');
+    assert.equal(counts.closes, counts.connects, 'and every one is closed');
+    assert.equal(counts.creates, created, 'no migration after the first');
+  });
+
+  test('NEXT_PUBLIC_DEPLOY_ENV=production loads the visit beacon; without it nothing loads it', async (t) => {
+    for (const [env, beacon] of [[{ NEXT_PUBLIC_DEPLOY_ENV: 'production' }, true], [{}, false]]) {
+      const counts = { connects: 0, closes: 0, creates: 0 };
+      let origin;
+      origin = await serve(
+        t,
+        workerHandler({
+          env: { get TRAPYARD_PUBLIC_URL() { return origin; }, DATABASE_URL: 'placeholder-database', ...env },
+          connect: counting(counts),
+          log: () => {},
+        }),
+      );
+      const html = await (await fetch(`${origin}/`)).text();
+      assert.equal(/<script src="\/beacon\.js"/.test(html), beacon, JSON.stringify(env));
+    }
+  });
+
+  test('a config error is a 500 naming the setting, before any connection; a failed migration closes its connection and is retried', async (t) => {
+    const logged = [];
+    const counts = { connects: 0, closes: 0, creates: 0 };
+    const noUrl = await serve(t, workerHandler({ env: { DATABASE_URL: 'placeholder-database' }, connect: counting(counts), log: (l) => logged.push(l) }));
+    const res = await fetch(`${noUrl}/`);
+    assert.equal(res.status, 500);
+    assert.match(await res.text(), /not configured/);
+    assert.match(logged.join('\n'), /TRAPYARD_PUBLIC_URL/);
+    assert.equal(counts.connects, 0);
+
+    const failing = { connects: 0, closes: 0, creates: 0 };
+    let fail = true;
+    let origin;
+    origin = await serve(
+      t,
+      workerHandler({
+        env: { get TRAPYARD_PUBLIC_URL() { return origin; }, DATABASE_URL: 'placeholder-database' },
+        connect: (url) => counting(failing, { failMigrate: fail })(url),
+        log: (l) => logged.push(l),
+      }),
+    );
+    const first = await fetch(`${origin}/`);
+    assert.equal(first.status, 500);
+    assert.ok(!(await first.text()).includes('placeholder-database'));
+    await settle();
+    assert.deepEqual([failing.connects, failing.closes], [1, 1], 'closed after the failure');
+    assert.match(logged.join('\n'), /ECONNRESET/);
+    assert.ok(!logged.join('\n').includes('placeholder-database'));
+    fail = false;
+    assert.equal((await fetch(`${origin}/`)).status, 200, 'the next request migrates again');
+    await settle();
+    assert.deepEqual([failing.connects, failing.closes], [2, 2]);
+  });
+});
+
+describe('the Cloudflare Worker config (wrangler.jsonc, src/worker.js)', () => {
+  /** wrangler.jsonc → JSON: // comments dropped outside strings ("https://" stays). */
+  function readJsonc(path) {
+    const text = readFileSync(path, 'utf8');
+    let out = '';
+    let inString = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (inString) {
+        out += c;
+        if (c === '\\') out += text[++i];
+        else if (c === '"') inString = false;
+      } else if (c === '"') {
+        inString = true;
+        out += c;
+      } else if (c === '/' && text[i + 1] === '/') {
+        while (i < text.length && text[i] !== '\n') i++;
+        out += '\n';
+      } else out += c;
+    }
+    return JSON.parse(out);
+  }
+
+  test('the Worker is named for the repo, runs src/worker.js with nodejs_compat, and is production on its own origin', () => {
+    const config = readJsonc(join(ROOT, 'wrangler.jsonc'));
+    assert.equal(config.name, 'trapyard');
+    assert.equal(config.main, 'src/worker.js');
+    assert.ok(config.compatibility_flags.includes('nodejs_compat'));
+    assert.ok(config.compatibility_date >= '2025-09-01', 'node:http servers need a 2025-09-01 or later date');
+    assert.equal(config.build, undefined, 'the credential broker refuses a build command');
+    assert.equal(config.keep_names, false, "/beacon.js is beacon.toString(): no esbuild __name() helpers in it");
+    assert.equal(publicOrigin(config.vars.TRAPYARD_PUBLIC_URL), 'https://trapyard.1426davejobs.workers.dev');
+    assert.equal(config.vars.NEXT_PUBLIC_DEPLOY_ENV, 'production');
+    assert.equal(config.vars.DATABASE_URL, undefined, 'DATABASE_URL is a secret, never a var');
+  });
+
+  test('src/worker.js serves workerHandler over pg, closing each pool, with settings from process.env', () => {
+    const source = readFileSync(join(ROOT, 'src', 'worker.js'), 'utf8');
+    assert.match(source, /from 'cloudflare:node'/);
+    assert.match(source, /workerHandler\(\{\s*env: process\.env,/);
+    assert.match(source, /close: \(\) => pool\.end\(\)/);
+    assert.match(source, /export default httpServerHandler\(\{ port: PORT \}\)/);
   });
 });
