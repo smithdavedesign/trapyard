@@ -185,7 +185,7 @@ describe('privacy, terms and the footer', () => {
       /no cookies/i,
       /IP address/,
       /Stripe/,
-      /Vercel/,
+      /Cloudflare/,
       /sessionStorage/,
       /localStorage/,
       /repohq:notrack/,

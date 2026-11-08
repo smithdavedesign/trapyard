@@ -1,0 +1,21 @@
+{
+  // The trapyard Worker on Cloudflare (free plan): `provision cloudflare deploy trapyard "$PWD"`.
+  // No build step: wrangler bundles src/worker.js and its imports (pg included) at deploy.
+  "name": "trapyard",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-10-15",
+  // node:http, node:crypto, node:zlib and process.env for the gauntlet; sockets for pg.
+  "compatibility_flags": ["nodejs_compat"],
+  // /beacon.js is beacon.toString() (src/beacon.js): esbuild's keepNames would put __name() calls,
+  // which don't exist in the browser, into the function's source.
+  "keep_names": false,
+  "vars": {
+    // Where runs, cards and canonical URLs live (a custom domain goes here).
+    "TRAPYARD_PUBLIC_URL": "https://trapyard.1426davejobs.workers.dev",
+    // The Worker is production: public pages load the visit beacon.
+    "NEXT_PUBLIC_DEPLOY_ENV": "production"
+  },
+  // DATABASE_URL is a secret: `provision cloudflare secret trapyard DATABASE_URL`.
+  "workers_dev": true,
+  "observability": { "enabled": true }
+}

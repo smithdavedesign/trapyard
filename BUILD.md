@@ -832,7 +832,17 @@ The M2 loop on the demo: `npm run demo`, then `replay trapyard-runs/<id> --trap 
 
 ## Deploy on a free tier
 
-**Hosted gauntlet: Vercel Hobby + Neon free Postgres, $0.**
+**Hosted gauntlet: a Cloudflare Worker + Neon free Postgres, $0 (since 2026-11-08).** The Vercel account is blocked
+(every deployment answers 402), so the gauntlet moved to the `trapyard` Worker on Cloudflare's free plan, which allows
+commercial use: https://trapyard.1426davejobs.workers.dev.
+1. `provision cloudflare deploy trapyard "$PWD"`: no build step; wrangler bundles [`src/worker.js`](src/worker.js), which
+   serves the same handler through `node:http` on Workers (`nodejs_compat`), with a `pg` pool per request
+   (`workerHandler`), closed when the response is done.
+2. `provision cloudflare secret trapyard DATABASE_URL` (and `STRIPE_SECRET_KEY` once there is one). `wrangler.jsonc`
+   sets `TRAPYARD_PUBLIC_URL` and `NEXT_PUBLIC_DEPLOY_ENV=production` as plain vars.
+3. `npm run smoke -- https://trapyard.1426davejobs.workers.dev` (step 5 below) passes against it.
+
+**Hosted gauntlet: Vercel Hobby + Neon free Postgres, $0** (kept working, but the account is blocked)
 
 1. **Provision** (the pipeline runs `.provision` through the credential broker; nothing here needs a value pasted):
    - `neon db trapyard` creates a free Neon Postgres and stores its `DATABASE_URL`.

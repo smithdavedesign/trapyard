@@ -407,7 +407,7 @@ export function privacyPage(site) {
 <p>Each event is one request to <code>${esc(SIGNAL_URL)}</code> that carries only the product's name (<code>trapyard</code>), the event's name, and the address of the page that linked you here if it was on another site (otherwise nothing). It sends no cookie and no identifier, and never a trapyard address: not the page you are on, not a score card, task URL or report link.</p>
 <p>Nothing is sent when your browser says it is automated (<code>navigator.webdriver</code>), on preview deployments, or when <code>repohq:notrack</code> is set in localStorage. To opt out, open your browser's console on this site and run <code>localStorage.setItem('repohq:notrack', '1')</code>.</p>
 <h2>Hosting</h2>
-<p>trapyard runs on Vercel, which keeps its own request logs, including IP addresses, under <a href="https://vercel.com/legal/privacy-policy">Vercel's privacy policy</a>. trapyard's own logs record only what failed (a path, an error code or Stripe's status code), never a request's body or your address.</p>
+<p>trapyard runs on Cloudflare Workers, which keeps its own request logs, including IP addresses, under <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare's privacy policy</a>. trapyard's own logs record only what failed (a path, an error code or Stripe's status code), never a request's body or your address.</p>
 <h2>Contact</h2>
 <p>Questions, or a run to delete: ${CONTACT}</p>
 <p><a href="/">Back to the gauntlet</a></p>
